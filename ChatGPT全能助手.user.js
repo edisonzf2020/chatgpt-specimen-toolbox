@@ -91,6 +91,19 @@
     // ─── 非 PayPal 通道 ──────────────────────────────────────────
     direct:    { label: '日区直绑 · JPY',    country: 'JP', currency: 'JPY', code: 'JP', note: '日卡 / Wise 直绑（不走 PayPal，需真日卡）' },
     gopay:     { label: 'GoPay · 印尼',      country: 'ID', currency: 'IDR', code: 'ID', note: '印尼区 GoPay · 教程称已被薅烂封号高发' },
+    // ─── 本地即时支付通道 · 印度 UPI / 巴西 PIX ────────────────────
+    //   依据 OpenAI Help「Multi-currency billing」官方说明：
+    //     · UPI（印度统一支付接口）对 Go / Plus 计划开放，账单币种必须 INR 卢比
+    //     · PIX（巴西央行即时转账）对 Go / Plus / Pro 计划开放，账单币种必须 BRL 雷亚尔
+    //   二者都是绑本地银行账户、扫码秒到的国民级支付，全程不需要信用卡。
+    //   country/currency 决定支付页币种与默认支付方式，locale 字段单独控制界面语言，
+    //   0 元试用资格照旧只看出口 IP。locale 已对照 Stripe Checkout 合法语言标签校验：
+    //     · 印度无 en-IN / 印地语界面，统一用 en（英语 · 印度商业通用语）
+    //     · 巴西用 pt-BR（巴西葡萄牙语 · 区别于葡萄牙的 pt）
+    //   订阅扣款机制：UPI 走 UPI AutoPay e-mandate、PIX 走 Pix Automatico mandate，
+    //   均为 OpenAI 官方对 Plus 月度订阅开放的合规循环代扣。
+    upi_in:    { label: 'UPI · 印度',        country: 'IN', currency: 'INR', code: 'IN', locale: 'en',    note: '印度 UPI 即时支付 · 卢比区 · 英文支付页 · 绑银行账户扫码秒付 · UPI AutoPay 撑月度订阅 · OpenAI 官方对 Plus 开放' },
+    pix_br:    { label: 'PIX · 巴西',        country: 'BR', currency: 'BRL', code: 'BR', locale: 'pt-BR', note: '巴西 PIX 即时转账 · 雷亚尔区 · 葡语支付页 · 扫码或粘贴码秒到账 · Pix Automatico 撑月度订阅 · OpenAI 官方对 Plus 开放' },
     paypal_gb: { label: 'PayPal · 英国',     country: 'GB', currency: 'GBP', code: 'GB', note: '英镑区 · PayPal 也常出现' },
     // 兜底 · 美区美元 · OpenAI 默认区域 · 通常不显示 PayPal 但生成最稳
     us_default:{ label: '美区兜底 · USD',    country: 'US', currency: 'USD', code: 'US', note: 'OpenAI 默认区域 · 通常无 PayPal 入口但卡直付最稳 · 欧元区全失败时的最后兜底' },
@@ -275,13 +288,24 @@
     if (!isObj(s)) throw new Error('Session 数据不是 JSON 对象。');
     return s;
   }
-  async function postCheckout(body, accessToken) {
+  // ─── 把通道的 locale 翻成合法的 Accept-Language 头 ───────────────
+  //   支付页（pay.openai.com 及其内嵌 Stripe Checkout）按 Accept-Language
+  //   决定界面语言。这里只动 HTTP 头、刻意不往请求体塞 locale 字段——请求体
+  //   locale 历史上会污染 hosted 模式默认行为（见下方字段黑名单注释）。因此未设
+  //   locale 的旧通道（欧元区 PayPal / 日区 / 美区等）维持原中文界面、零行为变化；
+  //   只有显式带 locale 的印度 / 巴西通道才切到对应区域语言。
+  function buildAcceptLanguage(locale) {
+    if (!locale) return 'zh-CN,zh;q=0.9';                    // 未指定：维持现状中文界面
+    if (locale.indexOf('-') < 0) return locale;               // 如 en → 'en'
+    return locale + ',' + locale.split('-')[0] + ';q=0.9';    // 如 pt-BR → 'pt-BR,pt;q=0.9'
+  }
+  async function postCheckout(body, accessToken, acceptLanguage) {
     const r = await fetch(CHECKOUT_URL, {
       method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + accessToken,
         'Content-Type': 'application/json',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Accept-Language': acceptLanguage || 'zh-CN,zh;q=0.9',
       },
       body: JSON.stringify(body),
     });
@@ -1225,7 +1249,7 @@
       billing_details: { country: profile.country, currency: profile.currency },
       cancel_url: CANCEL_URL,
       promo_campaign: { promo_campaign_id: 'plus-1-month-free', is_coupon_from_query_param: false },
-    }, token);
+    }, token, buildAcceptLanguage(profile.locale));
     const urls = buildBothCheckoutUrls(data, profile.country);
     if (!urls.external && !urls.internal) {
       throw new Error('响应里没有有效的链接。响应字段：' + Object.keys(data || {}).join(','));
