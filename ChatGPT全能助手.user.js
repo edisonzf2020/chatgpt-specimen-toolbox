@@ -375,18 +375,26 @@
   function stripeFetch(url, headers, body) {
     return new Promise(function (resolve, reject) {
       if (typeof GM_xmlhttpRequest === 'function') {
+        console.log('[' + NS + '] stripeFetch → GM_xmlhttpRequest:', url.slice(0, 80));
         GM_xmlhttpRequest({
           method: 'POST',
           url: url,
           headers: headers,
           data: body,
           timeout: 30000,
-          onload: function (res) { resolve({ status: res.status, text: res.responseText }); },
-          onerror: function () { reject(new Error('Stripe 请求失败（网络异常或被拦截）')); },
+          onload: function (res) {
+            console.log('[' + NS + '] GM_xmlhttpRequest 响应:', res.status, res.responseText.slice(0, 200));
+            resolve({ status: res.status, text: res.responseText });
+          },
+          onerror: function (err) {
+            console.error('[' + NS + '] GM_xmlhttpRequest 失败:', err);
+            reject(new Error('Stripe 请求失败（网络异常或被拦截）'));
+          },
           ontimeout: function () { reject(new Error('Stripe 请求超时')); },
         });
         return;
       }
+      console.log('[' + NS + '] stripeFetch → fetch (降级):', url.slice(0, 80));
       fetch(url, { method: 'POST', headers: headers, body: body })
         .then(function (r) { return r.text().then(function (t) { resolve({ status: r.status, text: t }); }); })
         .catch(function (e) { reject(e); });
@@ -405,9 +413,12 @@
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': DEFAULT_UA,
     };
+    console.log('[' + NS + '] Stripe init 请求 URL:', url.slice(0, 100));
+    console.log('[' + NS + '] Stripe init 请求头:', JSON.stringify({Auth: headers.Authorization.slice(0, 30) + '…', CT: headers['Content-Type'], UA: headers['User-Agent'].slice(0, 30) + '…'}));
     const res = await stripeFetch(url, headers, buildStripeInitBody(pk, locale));
     let data = {};
-    try { data = JSON.parse(res.text); } catch (e) {}
+    try { data = JSON.parse(res.text); } catch (e) { console.warn('[' + NS + '] Stripe init 响应非 JSON:', res.text.slice(0, 200)); }
+    console.log('[' + NS + '] Stripe init 响应状态:', res.status, 'keys:', Object.keys(data).join(','));
     if (res.status !== 200) {
       throw new Error('Stripe init 失败 HTTP ' + res.status + '：' + String(res.text || '').slice(0, 300));
     }
@@ -422,8 +433,19 @@
     if (!sid) return base;  // 连 session id 都没有，无从打 Stripe，直接退回旧逻辑
     const pk = (data && (data.publishable_key || '').trim()) || DEFAULT_STRIPE_PK;
     try {
+      console.log('[' + NS + '] 长链引擎 Step 1 响应字段:', JSON.stringify({
+        checkout_session_id: data.checkout_session_id ? '有' : '无',
+        publishable_key: data.publishable_key ? (data.publishable_key.slice(0, 20) + '…') : '无',
+        url: data.url ? (data.url.slice(0, 80) + '…') : '无',
+        client_secret: data.client_secret ? '有(' + data.client_secret.length + '字符)' : '无',
+        processor_entity: data.processor_entity || '无',
+      }));
+    } catch (_) {}
+    try {
       const sd = await stripeInit(sid, pk, locale);
+      console.log('[' + NS + '] Stripe init 完整响应 keys:', Object.keys(sd || {}).join(', '));
       let hosted = sd.stripe_hosted_url || sd.hosted_url || sd.url || '';
+      console.log('[' + NS + '] Stripe hosted URL:', hosted ? (hosted.slice(0, 100) + '…') : '空!');
       // init 没回 hosted url 时，退一步用 client_secret 拼 checkout.stripe.com 片段
       if (!hosted) {
         const frag = fragmentFromClientSecret(data.client_secret, sid);
