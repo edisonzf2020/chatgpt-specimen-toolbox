@@ -42,7 +42,8 @@
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
-    "https://api.stripe.com/*"
+    "https://api.stripe.com/*",
+    "https://codex-bypass.chuankangkk.top/*"
   ],
   "declarative_net_request": {
     "rule_resources": [

@@ -356,13 +356,14 @@
   }
 
   // 跨域 POST api.stripe.com：优先转交 background SW（绕 CORS），SW 不可用时降级 fetch
-  function stripeFetch(url, headers, body) {
+  //   background SW 内部会先直连 Stripe，失败后自动降级走自有域名代理。
+  function stripeFetch(url, headers, body, csId) {
     return new Promise(function (resolve, reject) {
       const hasRuntime = (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function');
       if (hasRuntime) {
         try {
           chrome.runtime.sendMessage(
-            { type: 'CKNB_STRIPE_INIT', url: url, headers: headers, body: body },
+            { type: 'CKNB_STRIPE_INIT', url: url, headers: headers, body: body, csId: csId },
             function (resp) {
               if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message || 'background 通信失败')); return; }
               if (!resp || !resp.ok) { reject(new Error((resp && resp.error) || 'Stripe 请求失败')); return; }
@@ -370,7 +371,7 @@
             }
           );
           return;
-        } catch (e) { /* 落到下方 fetch 兜底 */ }
+        } catch (e) { /* 落到下方 fetch 兆底 */ }
       }
       fetch(url, { method: 'POST', headers: headers, body: body })
         .then(function (r) { return r.text().then(function (t) { resolve({ status: r.status, text: t }); }); })
@@ -391,7 +392,7 @@
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': DEFAULT_UA,
     };
-    const res = await stripeFetch(url, headers, buildStripeInitBody(pk, locale));
+    const res = await stripeFetch(url, headers, buildStripeInitBody(pk, locale), csId);
     let data = {};
     try { data = JSON.parse(res.text); } catch (e) {}
     if (res.status !== 200) {

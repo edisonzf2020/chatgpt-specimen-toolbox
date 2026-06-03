@@ -104,16 +104,45 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // ------------------------------------------------------------
 const MSG_STRIPE_INIT = 'CKNB_STRIPE_INIT';
 
+// 自有域名 Stripe 代理（广告拦截扩展拉黑 api.stripe.com 时兑底）
+const STRIPE_PROXY = 'https://codex-bypass.chuankangkk.top/api/stripe-proxy';
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // 非本协议消息直接放行，避免占用其它监听器的响应通道
+  // 非本协议消息直接放行
   if (!msg || msg.type !== MSG_STRIPE_INIT) return;
-  fetch(msg.url, {
+
+  const csId = msg.csId || '';
+
+  // 方案 A：直连 Stripe
+  const directFetch = fetch(msg.url, {
     method: 'POST',
     headers: msg.headers || {},
     body: msg.body,
   })
-    .then((r) => r.text().then((t) => sendResponse({ ok: true, status: r.status, text: t })))
-    .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
-  // 返回 true 保持消息通道开启，等待上面的异步 sendResponse
+    .then((r) => r.text().then((t) => ({ ok: true, status: r.status, text: t })))
+    .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
+
+  directFetch.then((result) => {
+    if (result.ok) return result;
+    // 直连失败（可能被广告拦截），降级走代理
+    console.warn('[CKNB] Stripe 直连失败，降级代理:', result.error);
+    const proxyUrl = STRIPE_PROXY + '?cs_id=' + encodeURIComponent(csId);
+    return fetch(proxyUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': (msg.headers && msg.headers.Authorization) || '',
+        'Content-Type': (msg.headers && msg.headers['Content-Type']) || 'application/x-www-form-urlencoded',
+      },
+      body: msg.body,
+    })
+      .then((r) => r.json().then((j) => {
+        if (j && typeof j.status === 'number') {
+          return { ok: true, status: j.status, text: j.body || '' };
+        }
+        return { ok: false, error: '代理响应异常' };
+      }))
+      .catch((e) => ({ ok: false, error: '代理也失败: ' + String((e && e.message) || e) }));
+  }).then(sendResponse);
+
   return true;
 });

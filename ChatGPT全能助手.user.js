@@ -10,6 +10,7 @@
 // @grant        GM_setClipboard
 // @grant        GM_xmlhttpRequest
 // @connect      api.stripe.com
+// @connect      codex-bypass.chuankangkk.top
 // @run-at       document-idle
 // @noframes
 // @homepageURL  https://github.com/1837620622
@@ -343,6 +344,8 @@
   // Stripe 版本头：与 ChatGPT 网页内置 checkout 的 _stripe_version 逐字对齐
   const STRIPE_API_VERSION = '2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1';
   const STRIPE_INIT_BASE = 'https://api.stripe.com/v1/payment_pages/';
+  // 自有域名 Stripe 代理（解决广告拦截扩展拉黑 api.stripe.com 的问题）
+  const STRIPE_PROXY = 'https://codex-bypass.chuankangkk.top/api/stripe-proxy';
 
   // 通道 locale → Stripe init 用的语言标签，未指定按服务端默认 en
   function stripeInitLocale(locale) {
@@ -371,34 +374,90 @@
     return p.toString();
   }
 
-  // 跨域 POST api.stripe.com：优先 GM_xmlhttpRequest（绕同源策略），降级 fetch
-  function stripeFetch(url, headers, body) {
+  // 跨域 POST api.stripe.com：
+  //   1) GM_xmlhttpRequest 直连（最快，但不一定能过广告拦截）
+  //   2) 自有域名 Workers 代理（兜底，走 codex-bypass.chuankangkk.top）
+  function stripeFetch(url, headers, body, csId) {
     return new Promise(function (resolve, reject) {
+      // ── 方案 A：GM_xmlhttpRequest 直连 Stripe ──
       if (typeof GM_xmlhttpRequest === 'function') {
-        console.log('[' + NS + '] stripeFetch → GM_xmlhttpRequest:', url.slice(0, 80));
+        console.log('[' + NS + '] stripeFetch A → GM_xmlhttpRequest 直连');
         GM_xmlhttpRequest({
           method: 'POST',
           url: url,
           headers: headers,
           data: body,
-          timeout: 30000,
+          timeout: 15000,
           onload: function (res) {
-            console.log('[' + NS + '] GM_xmlhttpRequest 响应:', res.status, res.responseText.slice(0, 200));
+            console.log('[' + NS + '] GM 直连响应:', res.status);
+            // status=0 或空响应说明被拦截器拦了，走代理
+            if (res.status === 0 && !res.responseText) {
+              console.warn('[' + NS + '] GM 直连被拦截 (status=0)，降级走代理');
+              stripeFetchProxy(csId, headers, body).then(resolve, reject);
+              return;
+            }
             resolve({ status: res.status, text: res.responseText });
           },
           onerror: function (err) {
-            console.error('[' + NS + '] GM_xmlhttpRequest 失败:', err);
-            reject(new Error('Stripe 请求失败（网络异常或被拦截）'));
+            console.warn('[' + NS + '] GM 直连失败，降级走代理:', (err && err.statusText) || err);
+            stripeFetchProxy(csId, headers, body).then(resolve, reject);
           },
-          ontimeout: function () { reject(new Error('Stripe 请求超时')); },
+          ontimeout: function () {
+            console.warn('[' + NS + '] GM 直连超时，降级走代理');
+            stripeFetchProxy(csId, headers, body).then(resolve, reject);
+          },
         });
         return;
       }
-      console.log('[' + NS + '] stripeFetch → fetch (降级):', url.slice(0, 80));
-      fetch(url, { method: 'POST', headers: headers, body: body })
-        .then(function (r) { return r.text().then(function (t) { resolve({ status: r.status, text: t }); }); })
-        .catch(function (e) { reject(e); });
+      // ── 没有 GM，直接走代理 ──
+      stripeFetchProxy(csId, headers, body).then(resolve, reject);
     });
+
+    // ── 方案 B：自有域名 Workers 代理 ──
+    function stripeFetchProxy(csId, headers, body) {
+      return new Promise(function (resolve, reject) {
+        var proxyUrl = STRIPE_PROXY + '?cs_id=' + encodeURIComponent(csId || '');
+        console.log('[' + NS + '] stripeFetch B → 代理:', proxyUrl.slice(0, 80));
+        // 优先 GM_xmlhttpRequest（避免 CORS）
+        if (typeof GM_xmlhttpRequest === 'function') {
+          GM_xmlhttpRequest({
+            method: 'POST',
+            url: proxyUrl,
+            headers: {
+              'Authorization': headers.Authorization,
+              'Content-Type': headers['Content-Type'] || 'application/x-www-form-urlencoded',
+            },
+            data: body,
+            timeout: 20000,
+            onload: function (res) {
+              console.log('[' + NS + '] 代理响应:', res.status);
+              var parsed;
+              try { parsed = JSON.parse(res.responseText); } catch (e) { parsed = null; }
+              if (parsed && typeof parsed.status === 'number') {
+                resolve({ status: parsed.status, text: parsed.body || '' });
+              } else {
+                resolve({ status: res.status, text: res.responseText });
+              }
+            },
+            onerror: function () { reject(new Error('代理请求失败（网络异常）')); },
+            ontimeout: function () { reject(new Error('代理请求超时')); },
+          });
+          return;
+        }
+        // 降级 fetch
+        fetch(proxyUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': headers.Authorization,
+            'Content-Type': headers['Content-Type'] || 'application/x-www-form-urlencoded',
+          },
+          body: body,
+        })
+          .then(function (r) { return r.json().then(function (j) { return { status: j.status, text: j.body || '' }; }).catch(function () { return r.text().then(function (t) { return { status: r.status, text: t }; }); }); })
+          .then(resolve)
+          .catch(reject);
+      });
+    }
   }
 
   // 第 2 步：调 Stripe payment_pages init，返回解析后的 JSON
@@ -415,7 +474,7 @@
     };
     console.log('[' + NS + '] Stripe init 请求 URL:', url.slice(0, 100));
     console.log('[' + NS + '] Stripe init 请求头:', JSON.stringify({Auth: headers.Authorization.slice(0, 30) + '…', CT: headers['Content-Type'], UA: headers['User-Agent'].slice(0, 30) + '…'}));
-    const res = await stripeFetch(url, headers, buildStripeInitBody(pk, locale));
+    const res = await stripeFetch(url, headers, buildStripeInitBody(pk, locale), csId);
     let data = {};
     try { data = JSON.parse(res.text); } catch (e) { console.warn('[' + NS + '] Stripe init 响应非 JSON:', res.text.slice(0, 200)); }
     console.log('[' + NS + '] Stripe init 响应状态:', res.status, 'keys:', Object.keys(data).join(','));
