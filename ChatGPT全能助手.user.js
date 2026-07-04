@@ -361,10 +361,11 @@
       : (Date.now().toString(16) + Math.random().toString(16).slice(2));
     const p = new URLSearchParams();
     p.set('browser_locale', 'en-US');
+    // ponytail: 不要加 custom_checkout / manual_approval / server_updates 这几个
+    //   client_betas —— 它们把 hosted session 的集成模式改成 custom+manual_approval，
+    //   导致 pay.openai.com 长链点「订阅」时 confirm 无法 finalize（转圈圈回原页、不扣款）。
+    //   init 只用来拿 #fid 片段，不要污染 session 的集成模式。退路见 buildLongLinkUrls 的 catch。
     p.set('browser_timezone', 'Asia/Shanghai');
-    p.set('elements_session_client[client_betas][0]', 'custom_checkout_server_updates_1');
-    p.set('elements_session_client[client_betas][1]', 'custom_checkout_manual_approval_1');
-    p.set('elements_session_client[elements_init_source]', 'custom_checkout');
     p.set('elements_session_client[referrer_host]', 'chatgpt.com');
     p.set('elements_session_client[stripe_js_id]', jsId);
     p.set('elements_session_client[locale]', stripeInitLocale(locale));
