@@ -134,6 +134,8 @@
       // 自定义 country/currency 输入框（持久化，方便用户记住最近一次试的组合）
       customCountry: persisted.plusCustomCountry || '',
       customCurrency: persisted.plusCustomCurrency || '',
+      // 优惠活动 id：持久化，缺省 plus-1-month-free（1 月免费试用）· 清空走普通月付
+      promoCampaignId: typeof persisted.plusPromoCampaignId === 'string' ? persisted.plusPromoCampaignId : 'plus-1-month-free',
       // Token 来源：'session'（当前网页）/ 'custom'（用户粘贴）
       //   tokenSource + customToken 都持久化到 localStorage，下次打开还能用
       //   （仅你自己的浏览器本地，从未上传任何服务端）
@@ -1336,7 +1338,7 @@
   //
   //  字段黑名单（不能加，会污染默认行为）：
   //    · success_url                ← 让 ChatGPT 后端自己决定
-  //    · entry_point / promo_campaign ← 会导致 Stripe session 异常，长链打不开
+  //    · promo_campaign            ← 由 UI「优惠活动 id」控制（缺省 plus-1-month-free）· 可清空走普通月付
   //    · locale                     ← 跟随浏览器
   //    · check_card_proxy           ← 旧 API 字段，已过时
   //
@@ -1450,12 +1452,20 @@
     const token = await resolveAccessToken();
     // hosted 模式：响应直接给 pay.openai.com/c/pay/cs_xxx#fid=xxx 完整长链。
     // 同一个 checkout_session_id 也能拼出 chatgpt.com 内部 wrapper。
-    const data = await postCheckout({
+    // 优惠活动 id：UI「优惠活动 id」控制。缺省 plus-1-month-free 走 1 月免费分支；
+    // UI 清空则不带 promo_campaign，走普通月付（参考 Team 的 promo_code 写法）。
+    const promoCampaignId = String(state.plus.promoCampaignId != null ? state.plus.promoCampaignId : 'plus-1-month-free').trim();
+    const body = {
       plan_name: 'chatgptplusplan',
       checkout_ui_mode: 'hosted',
       billing_details: { country: profile.country, currency: profile.currency },
       cancel_url: CANCEL_URL,
-    }, token, buildAcceptLanguage(profile.locale));
+    };
+    if (promoCampaignId) body.promo_campaign = {
+      promo_campaign_id: promoCampaignId,
+      is_coupon_from_query_param: false,
+    };
+    const data = await postCheckout(body, token, buildAcceptLanguage(profile.locale));
     const urls = await buildLongLinkUrls(data, profile.country, profile.locale);
     if (!urls.external && !urls.internal) {
       throw new Error('响应里没有有效的链接。响应字段：' + Object.keys(data || {}).join(','));
@@ -2006,6 +2016,14 @@
       icon('globe', 14) + ' <span>仅批量欧元区 PayPal 池</span>',
       '  </button>',
       '</div>',
+      // 优惠活动 id · 全局生效（影响所有 Plus 生成：预设区 / 批量 / 自定义 country）
+      //   · 缺省 plus-1-month-free 走 1 月免费试用分支
+      //   · 清空则不带 promo_campaign，走普通月付
+      //   · OpenAI 调整活动名时即时改，不用动代码（参考 Team 的 promo_code 模式）
+      '<div class="lbl" style="margin-top:14px">优惠活动 id<span class="hint">决定走哪个 promo 分支 · 缺省 1 月免费</span></div>',
+      '<div class="row" style="margin-bottom:0">',
+      '  <input class="ipt" id="' + NS + '-plus-promo" value="' + escapeHtml(state.plus.promoCampaignId != null ? state.plus.promoCampaignId : 'plus-1-month-free') + '" placeholder="plus-1-month-free · 清空走普通月付">',
+      '</div>',
       // 自定义国家/币种 · 当 OpenAI / Stripe 改了预设国家的 PayPal 映射时，
       // 用户能即时切到任意 ISO-3166 alpha-2 + ISO-4217 三字母币种试错。
       '<div class="lbl" style="margin-top:14px">自定义 country / currency<span class="hint">预设全失效时用这个</span></div>',
@@ -2452,6 +2470,12 @@
       if (e.target.value !== state.plus.customCurrency) e.target.value = state.plus.customCurrency;
       saveSettings({ plusCustomCurrency: state.plus.customCurrency });
     }
+    // Plus 优惠活动 id 输入实时同步并持久化（允许空 = 走普通月付）
+    if (e.target && e.target.id === NS + '-plus-promo') {
+      state.plus.promoCampaignId = e.target.value.trim();
+      saveSettings({ plusPromoCampaignId: state.plus.promoCampaignId });
+    }
+    // 自定义 token textarea — 持久化到 localStorage（你的浏览器本地）
     // 自定义 token textarea — 持久化到 localStorage（你的浏览器本地）
     if (e.target && e.target.id === NS + '-plus-token') {
       state.plus.customToken = e.target.value;
