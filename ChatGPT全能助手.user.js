@@ -2682,10 +2682,10 @@
       ].join('');
     };
     el.innerHTML = [
-      // 外部 Stripe 长链 —— 主推（在指纹浏览器 / 美国 IP 干净环境打开）
-      linkBlock('① 外部 Stripe 长链', 'pay.openai.com · standalone · 可在指纹浏览器 / 美国 IP 环境打开 · 用户主要场景', ext, true, 0),
-      // 内部 ChatGPT wrapper —— 备选（仅当前账号当前浏览器可用）
-      linkBlock('② 内部 ChatGPT 短链', 'chatgpt.com · 仅当前登录账号当前浏览器可用 · 备选', intl, false, 1),
+      // 内部 ChatGPT 短链 —— 主推（支付可正常完成）
+      linkBlock('① 支付链接', 'chatgpt.com/checkout · 需登录同一账号 · 支付可正常完成', intl, true, 0),
+      // 外部 Stripe 长链 —— 仅供参考（OpenAI 已改后端，hosted 链接无法完成付款）
+      linkBlock('② 外部长链（仅参考）', 'pay.openai.com · 可打开但无法完成付款 · OpenAI 已禁用外部 hosted 付款', ext, false, 1),
       (!ext && !intl) ? '<div class="stat err">未能拿到任何链接</div>' : '',
     ].join('');
     // 事件委托：点 copy/open 时根据 idx 决定用哪条
@@ -2694,10 +2694,10 @@
         e.stopPropagation();
         const act = b.getAttribute('data-plus-act');
         const idx = b.getAttribute('data-plus-idx');
-        const u = idx === '0' ? ext : intl;
+        const u = idx === '0' ? intl : ext;
         if (!u) return;
         if (act === 'copy') {
-          copyText(u).then(function() { toast('已复制 ' + (idx === '0' ? '外部长链' : '内部短链'), 'success'); })
+          copyText(u).then(function() { toast('已复制 ' + (idx === '0' ? '支付链接' : '外部长链'), 'success'); })
                      .catch(function(err) { toast(err.message || String(err), 'error'); });
         } else if (act === 'open') {
           window.open(u, '_blank', 'noopener,noreferrer');
