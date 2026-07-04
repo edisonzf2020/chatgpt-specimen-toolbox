@@ -503,29 +503,11 @@
         processor_entity: data.processor_entity || '无',
       }));
     } catch (_) {}
-    try {
-      const sd = await stripeInit(sid, pk, locale);
-      console.log('[' + NS + '] Stripe init 完整响应 keys:', Object.keys(sd || {}).join(', '));
-      let hosted = sd.stripe_hosted_url || sd.hosted_url || sd.url || '';
-      console.log('[' + NS + '] Stripe hosted URL:', hosted ? (hosted.slice(0, 100) + '…') : '空!');
-      // init 没回 hosted url 时，退一步用 client_secret 拼 checkout.stripe.com 片段
-      if (!hosted) {
-        const frag = fragmentFromClientSecret(data.client_secret, sid);
-        if (frag) hosted = 'https://checkout.stripe.com/c/pay/' + sid + frag;
-      }
-      // 第 3 步：host 重写 checkout.stripe.com → pay.openai.com
-      const external = hosted
-        ? (hosted.indexOf('checkout.stripe.com') >= 0 ? hosted.replace('checkout.stripe.com', 'pay.openai.com') : hosted)
-        : base.external;
-      const stripeMirror = hosted
-        ? (hosted.indexOf('pay.openai.com') >= 0 ? hosted.replace('pay.openai.com', 'checkout.stripe.com') : hosted)
-        : (base.external && base.external.indexOf('pay.openai.com') >= 0 ? base.external.replace('pay.openai.com', 'checkout.stripe.com') : base.external);
-      return { external: external || base.external, internal: base.internal, stripe: stripeMirror, cs_id: sid };
-    } catch (e) {
-      // Stripe init 失败不致命：退回旧版逻辑，至少不比 v2.3.x 差
-      try { console.warn('[' + NS + '] Stripe init 失败，回退旧版取链：' + ((e && e.message) || e)); } catch (_) {}
-      return base;
-    }
+    // ponytail: 不要调 stripeInit + host 重写。
+    //   Step 2 init 会改变 session 集成模式（即使不带 client_betas 也会），
+    //   host 重写 checkout.stripe.com → pay.openai.com 会破坏 confirm 回调链路，
+    //   导致长链点「订阅」时转圈圈不扣款。直接用 OpenAI 给的 data.url（plus.js 做法）。
+    return { external: base.external, internal: base.internal, stripe: base.external, cs_id: sid };
   }
 
   // AUTH CONVERSION (上游 gtxx3600 兼容)
